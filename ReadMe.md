@@ -30,9 +30,9 @@ You can build City3D from the source code˙
       Without Qt, you should still be able to build the two command-line programs [CLI_Example_1](https://github.com/tudelft3d/City3D/tree/main/code/CLI_Example_1) and [CLI_Example_2](https://github.com/tudelft3d/City3D/tree/main/code/CLI_Example_2).
     - [CGAL](http://www.cgal.org/index.html) (v5.6, v5.5 and v5.4 have been tested). Newer versions of CGAL (v5.6 and later) are always preferred for better performance.
     - [OpenCV](https://opencv.org/releases/) (v4.0 and later, only the main modules are needed).
-    - [Gurobi](https://www.gurobi.com/). **Note for Linux users:** You may have to build the Gurobi library (`libgurobi_c++.a`) 
-      because the prebuilt one in the original package might NOT be compatible with your compiler. To do so, go to `PATH-TO-GUROBI/src/build` 
-      and run `make`. Then replace the original `libgurobi_c++.a` (in the `lib` directory) with your generated file.
+    - [Gurobi](https://www.gurobi.com/) (optional). PolyFit can use either the open-source SCIP solver or the commercial solver [Gurobi](https://www.gurobi.com/) for the [core optimization](https://github.com/tudelft3d/City3D/blob/main/code/method/face_selection_optimization.cpp) step. The entire source code of the SCIP solver is already included in this repository. **Note for Linux users**(if you choose to use Gurobi):
+      You may have to build the Gurobi library (`libgurobi_c++.a`) because the prebuilt one in the original package might NOT be compatible with your compiler. To do so, go to `PATH-TO-GUROBI/src/build` and run `make`.
+      Then replace the original `libgurobi_c++.a` (in the `lib` directory) with your generated file.
 
 * Build
   
@@ -114,8 +114,6 @@ will be suitable for the reconstruction.
 ---
 
 ### About the solvers
-This demo program can use either the  SCIP solver or the commercial solver [Gurobi](https://www.gurobi.com/) for the [core optimization](https://github.com/tudelft3d/City3D/blob/main/code/method/face_selection_optimization.cpp) step.
-The entire source code of the SCIP solver is already included in this repository. 
 
 The Gurobi solver is faster than SCIP and is thus highly recommended. To use Gurobi, install it first and make sure 
 the headers and libraries of Gurobi can be found by CMake. This can be done by specifying the paths of Gurobi in [FindGUROBI.cmake](./code/cmake/FindGUROBI.cmake). 
