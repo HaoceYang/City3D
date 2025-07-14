@@ -561,3 +561,8 @@ void PaintCanvas::reconstruct() {
 
 	update_all();
 }
+
+void PaintCanvas::skip_thread() {
+    std::cout<<"skip the currect thread"<<std::endl;
+
+}

@@ -204,6 +204,8 @@ void MainWindow::createActions() {
 	connect(actionSegmentation, SIGNAL(triggered()), mainCanvas_, SLOT(segmentation()));
 	connect(actionExtractRoofs, SIGNAL(triggered()), mainCanvas_, SLOT(extractRoofs()));
 	connect(actionReconstruction, SIGNAL(triggered()), mainCanvas_, SLOT(reconstruct()));
+
+    connect(actionSkip, SIGNAL(triggered()), mainCanvas_, SLOT(skip_thread()));
 	
 	wgtRender_ = new WgtRender(this);
 	layoutRenderer->addWidget(wgtRender_);

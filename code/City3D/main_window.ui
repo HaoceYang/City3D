@@ -70,8 +70,8 @@
         <rect>
          <x>0</x>
          <y>0</y>
-         <width>300</width>
-         <height>645</height>
+         <width>344</width>
+         <height>622</height>
         </rect>
        </property>
        <layout class="QVBoxLayout" name="verticalLayout">
@@ -390,6 +390,7 @@
    <addaction name="actionSegmentation"/>
    <addaction name="actionExtractRoofs"/>
    <addaction name="actionReconstruction"/>
+   <addaction name="actionSkip"/>
    <addaction name="separator"/>
    <addaction name="actionAbout"/>
   </widget>
@@ -466,6 +467,15 @@
    </property>
    <property name="toolTip">
     <string>Switch between perspective and orthographic projection</string>
+   </property>
+  </action>
+  <action name="actionSkip">
+   <property name="icon">
+    <iconset resource="Resources/City3D.qrc">
+     <normaloff>:/Resources/skip.png</normaloff>:/Resources/skip.png</iconset>
+   </property>
+   <property name="text">
+    <string>Skip</string>
    </property>
   </action>
  </widget>

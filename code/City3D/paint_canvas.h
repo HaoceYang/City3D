@@ -92,6 +92,8 @@ public Q_SLOTS:
 	void extractRoofs();
 	void reconstruct();
 
+    void skip_thread();
+
 	void setShowPointSet(bool);
 	void setShowFootPrint(bool);
 	void setShowReconstruction(bool);

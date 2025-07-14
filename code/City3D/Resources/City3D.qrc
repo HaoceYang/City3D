@@ -11,5 +11,6 @@
         <file>City3D.png</file>
         <file>City3D.ico</file>
         <file>City3D.icns</file>
+        <file>skip.png</file>
     </qresource>
 </RCC>
