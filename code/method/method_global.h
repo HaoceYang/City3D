@@ -17,6 +17,9 @@ namespace Method {
     extern double min_points;
     extern double pixel_size;
 
+	//________________ monitor the process ____________________
+	extern bool skip_this_process;
+
 	// - two points considered coincident
 	// - a point considered to be on a plane, etc.
 	extern double coincident_threshold;
