@@ -32,6 +32,15 @@
 #include <CGAL/Delaunay_triangulation_2.h>
 #include <CGAL/interpolation_functions.h>
 
+// Platform-specific includes
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__APPLE__) || defined(__linux__)
+#include <pthread.h>
+#include <csignal>
+#endif
+constexpr int TIMEOUT_SECONDS = 600;
+
 typedef CGAL::Exact_predicates_inexact_constructions_kernel K;
 typedef K::FT FT;
 typedef K::Point_3 Point_3d;
@@ -43,30 +52,43 @@ double image_x_min;
 double image_y_min;
 double image_delta_res;
 
+struct ThreadData
+{
+    PointSet* roof_pset;
+    std::vector<vec3> line_segments;
+    Map::Facet* footprint;
+    LinearProgramSolver::SolverName solver_name;
+    std::string index_string;
+    int status;
+};
 
 Reconstruction::Reconstruction()
- : width_(400), height_(400)
+    : width_(400), height_(400)
 {
 }
 
 
-void Reconstruction::segmentation(PointSet* pset, Map *footprint, bool simplify_footprint)
+void Reconstruction::segmentation(PointSet* pset, Map* footprint, bool simplify_footprint)
 {
-    if (!pset) {
+    if (!pset)
+    {
         Logger::warn("-") << "point cloud data does not exist" << std::endl;
         return;
     }
 
     // setup intermediate directory
     Method::intermediate_dir = FileUtils::name_less_extension(pset->name()) + "_TEMP";
-    if (FileUtils::is_directory(Method::intermediate_dir)) {
+    if (FileUtils::is_directory(Method::intermediate_dir))
+    {
         if (!FileUtils::delete_directory(Method::intermediate_dir))
-            Logger::err("-") << "failed to delete existing intermediate directory: " << Method::intermediate_dir << std::endl;
+            Logger::err("-") << "failed to delete existing intermediate directory: " << Method::intermediate_dir <<
+                std::endl;
     }
     if (!FileUtils::create_directory(Method::intermediate_dir))
         Logger::err("-") << "failed to create intermediate directory: " << Method::intermediate_dir << std::endl;
 
-    if (footprint) {
+    if (footprint)
+    {
         if (simplify_footprint)
             footprint_simplification(footprint);
     }
@@ -94,16 +116,16 @@ void Reconstruction::segmentation(PointSet* pset, Map *footprint, bool simplify_
 
     MapFacetAttribute<VertexGroup::Ptr> buildings(footprint, "buildings");
 
-    std::vector<VertexGroup::Ptr> &groups = pset->groups();
+    std::vector<VertexGroup::Ptr>& groups = pset->groups();
     ProgressLogger progress(footprint->size_of_facets());
     FOR_EACH_FACET_CONST(Map, footprint, it)
     {
-        const Polygon3d &plg = it->to_polygon();
+        const Polygon3d& plg = it->to_polygon();
         Polygon2d plg2d;
         Box3d box;
         for (std::size_t i = 0; i < plg.size(); ++i)
         {
-            const vec3 &p = plg[i];
+            const vec3& p = plg[i];
             plg2d.push_back(vec2(p.x, p.y));
             box.add_point(vec3(p.x, p.y, z_footprint));
         }
@@ -141,25 +163,24 @@ void Reconstruction::segmentation(PointSet* pset, Map *footprint, bool simplify_
 
         progress.next();
     }
-
 }
 
-int Reconstruction::extract_building_roof(PointSet *pset,
-                                           VertexGroup *building,
-                                           unsigned int min_support)
+int Reconstruction::extract_building_roof(PointSet* pset,
+                                          VertexGroup* building,
+                                          unsigned int min_support)
 {
     std::vector<unsigned int> p_index = *building;
     std::vector<unsigned int> remaining_ind;
 
     RegionGrowingDectetor rg;
     //std::cout<<"min_support: "<<min_support<<std::endl;
-    const std::vector<VertexGroup::Ptr> &roofs = rg.detect(pset, p_index, min_support);
+    const std::vector<VertexGroup::Ptr>& roofs = rg.detect(pset, p_index, min_support);
     if (roofs.empty())
         return 0;
 
     for (std::size_t j = 0; j < roofs.size(); ++j)
     {
-        const Color &c = random_color();
+        const Color& c = random_color();
         roofs[j]->set_color(c);
     }
     building->set_children(roofs);
@@ -167,16 +188,19 @@ int Reconstruction::extract_building_roof(PointSet *pset,
     return roofs.size();
 }
 
-bool Reconstruction::extract_roofs(PointSet *pset, Map *footprint)
+bool Reconstruction::extract_roofs(PointSet* pset, Map* footprint)
 {
-    if (!pset) {
+    if (!pset)
+    {
         Logger::warn("-") << "point cloud data does not exist" << std::endl;
         return false;
     }
 
     if (!footprint)
     {
-        Logger::warn("-") << "footprint does not exist. You must either load it or generate it by clicking the 'Segmentation' button" << std::endl;
+        Logger::warn("-") <<
+            "footprint does not exist. You must either load it or generate it by clicking the 'Segmentation' button" <<
+            std::endl;
         return false;
     }
 
@@ -200,12 +224,12 @@ bool Reconstruction::extract_roofs(PointSet *pset, Map *footprint)
         VertexGroup::Ptr g = buildings[it];
         if (!g)
             continue;
-        std::vector<VertexGroup::Ptr> &roofs = g->children();
+        std::vector<VertexGroup::Ptr>& roofs = g->children();
         unsigned int min_points = Method::min_points;
         num += extract_building_roof(pset, g, min_points);
         while (roofs.empty() && min_points > 6) // Liangliang: the number must be "> 6" to avoid infinite loops
         {
-            num += extract_building_roof(pset, g,  min_points);
+            num += extract_building_roof(pset, g, min_points);
             min_points *= 0.75;
         }
         progress.next();
@@ -214,13 +238,13 @@ bool Reconstruction::extract_roofs(PointSet *pset, Map *footprint)
     return num > 0;
 }
 
-PointSet *Reconstruction::create_roof_point_set(const PointSet *pset,
-                                                const std::vector<VertexGroup::Ptr> &segments, VertexGroup *building)
+PointSet* Reconstruction::create_roof_point_set(const PointSet* pset,
+                                                const std::vector<VertexGroup::Ptr>& segments, VertexGroup* building)
 {
-    const std::vector<vec3> &points = pset->points();
-    const std::vector<vec3> &normals = pset->normals();
-    const std::vector<vec3> &colors = pset->colors();
-    PointSet *new_pset = new PointSet;
+    const std::vector<vec3>& points = pset->points();
+    const std::vector<vec3>& normals = pset->normals();
+    const std::vector<vec3>& colors = pset->colors();
+    PointSet* new_pset = new PointSet;
     std::vector<unsigned int> full_vector = *building;
     std::set<unsigned int> full_set(full_vector.begin(), full_vector.end());
     std::set<unsigned int> planar_set, remaining_set;
@@ -228,7 +252,7 @@ PointSet *Reconstruction::create_roof_point_set(const PointSet *pset,
 
     for (std::size_t i = 0; i < segments.size(); ++i)
     {
-        VertexGroup *vg = segments[i];
+        VertexGroup* vg = segments[i];
 
         VertexGroup::Ptr group = new VertexGroup;
         group->set_point_set(new_pset);
@@ -260,7 +284,7 @@ PointSet *Reconstruction::create_roof_point_set(const PointSet *pset,
     for (auto iter = remaining_set.begin(); iter != remaining_set.end(); ++iter)
     {
         auto in_p = *iter;
-        const vec3 &p = points[in_p];
+        const vec3& p = points[in_p];
         new_pset->points().push_back(p);
         if (pset->has_normals())
             new_pset->normals().push_back(normals[in_p]);
@@ -271,9 +295,8 @@ PointSet *Reconstruction::create_roof_point_set(const PointSet *pset,
     return new_pset;
 }
 
-PointSet *Reconstruction::create_projected_point_set(const PointSet *pset, const PointSet *roof)
+PointSet* Reconstruction::create_projected_point_set(const PointSet* pset, const PointSet* roof)
 {
-
     KdTreeSearch_var kdtree = new KdTreeSearch;
     kdtree->begin();
     // I need a 2D version of the point cloud
@@ -335,7 +358,7 @@ PointSet *Reconstruction::create_projected_point_set(const PointSet *pset, const
         }
     }
 
-    PointSet *new_pset = new PointSet;
+    PointSet* new_pset = new PointSet;
     int count = 0;
     VertexGroup::Ptr group = new VertexGroup;
     group->set_point_set(new_pset);
@@ -357,29 +380,32 @@ PointSet *Reconstruction::create_projected_point_set(const PointSet *pset, const
 
 // create a point set from a set of planar segments
 
-bool is_simple_polygon(const Map::Facet *f)
+bool is_simple_polygon(const Map::Facet* f)
 {
-    const Plane3d &plane = Geom::facet_plane(f);
+    const Plane3d& plane = Geom::facet_plane(f);
     Polygon_2 plg;
     FacetHalfedgeConstCirculator cir(f);
     for (; !cir->end(); ++cir)
     {
-        const vec3 &p = cir->halfedge()->vertex()->point();
-        const vec2 &q = plane.to_2d(p);
+        const vec3& p = cir->halfedge()->vertex()->point();
+        const vec2& q = plane.to_2d(p);
         plg.push_back(to_cgal_point(q));
     }
     return plg.is_simple();
 }
 
 
-bool save_footprint(Map::Facet *footprint, const vec3& offset, const std::string& footprint_file_name) {
+bool save_footprint(Map::Facet* footprint, const vec3& offset, const std::string& footprint_file_name)
+{
     // save footprint
     Polygon3d plg;
-    Map::Halfedge* h = footprint->halfedge() ;
-    do {
+    Map::Halfedge* h = footprint->halfedge();
+    do
+    {
         plg.push_back(h->vertex()->point());
-        h = h->next() ;
-    } while(h != footprint->halfedge()) ;
+        h = h->next();
+    }
+    while (h != footprint->halfedge()) ;
     Map* footprint_mesh = Geom::copy_to_mesh(plg);
     footprint_mesh->set_offset(offset);
     bool status = MapIO::save(footprint_file_name, footprint_mesh);
@@ -388,9 +414,11 @@ bool save_footprint(Map::Facet *footprint, const vec3& offset, const std::string
 }
 
 
-bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, LinearProgramSolver::SolverName solver_name, bool update_display)
+bool Reconstruction::reconstruct(PointSet* pset, Map* footprint, Map* result,
+                                 LinearProgramSolver::SolverName solver_name, bool update_display)
 {
-    if (!pset) {
+    if (!pset)
+    {
         Logger::warn("-") << "point cloud data does not exist" << std::endl;
         return false;
     }
@@ -416,12 +444,13 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
         std::stringstream ss;
         ss << std::setfill('0') << std::setw(length) << idx;
         const std::string index_string = ss.str();
-        const std::string footprint_file_name  = Method::intermediate_dir + "/" + index_string + "_Footprint.obj";
+        const std::string footprint_file_name = Method::intermediate_dir + "/" + index_string + "_Footprint.obj";
 
         StopWatch t_single;
 
         VertexGroup::Ptr g = buildings[it];
-        if (!g) {
+        if (!g)
+        {
             ++num_failed;
             if (!save_footprint(it, pset->offset(), footprint_file_name))
                 Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
@@ -440,10 +469,11 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
             continue;
         }
 
-        std::vector<VertexGroup::Ptr> &roofs = g->children();
+        std::vector<VertexGroup::Ptr>& roofs = g->children();
         PointSet::Ptr roof_pset = create_roof_point_set(pset, roofs, g);
         roof_pset->set_offset(pset->offset());
-        if (roof_pset->groups().empty()) {
+        if (roof_pset->groups().empty())
+        {
             ++num_failed;
             if (!save_footprint(it, pset->offset(), footprint_file_name))
                 Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
@@ -454,18 +484,85 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
         PointSet::Ptr image_pset = create_projected_point_set(pset, roof_pset);
         image_pset->set_offset(pset->offset());
 
-        if (roof_pset->num_points() < 20) {
+        if (roof_pset->num_points() < 20)
+        {
             ++num_failed;
             if (!save_footprint(it, pset->offset(), footprint_file_name))
                 Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
-            Logger::err("-") << "too few (" << roof_pset->num_points() << ") roof points (reconstruction skipped)" << std::endl;
+            Logger::err("-") << "too few (" << roof_pset->num_points() << ") roof points (reconstruction skipped)" <<
+                std::endl;
             continue;
         }
 
         const auto line_segs = compute_line_segment(image_pset, roof_pset, it);
 
         int status = -1;
-        Map *building = reconstruct_single_building(roof_pset, line_segs, it, solver_name, index_string, status);
+        {
+            auto* threadData = new ThreadData{roof_pset, line_segs, it, solver_name, index_string, status};
+            bool timed_out = false;
+            bool skipped = false;
+
+            // Windows implementation using CreateThread
+            HANDLE hThread = CreateThread(
+                nullptr, 0,
+                [](LPVOID param) -> DWORD
+                {
+                    auto* data = static_cast<ThreadData*>(param);
+                    auto building = Reconstruction::reconstruct_single_building(data->roof_pset, data->line_segments, data->footprint,
+                                                              data->solver_name,
+                                                              data->index_string, data->status);
+                    delete data;
+                    return 0;
+                },
+                threadData, 0, nullptr
+            );
+
+            if (!hThread)
+            {
+                std::cerr << "Error creating thread: " << GetLastError() << "\n";
+                delete threadData;
+                continue;
+            }
+
+            auto start = std::chrono::steady_clock::now();
+            while (WaitForSingleObject(hThread, 1000) == WAIT_TIMEOUT)
+            {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - start).count();
+
+                if (elapsed >= TIMEOUT_SECONDS)
+                {
+                    TerminateThread(hThread, 1);
+                    std::cout << "\nProcess " << idx << " terminated (Timeout)\n";
+                    CloseHandle(hThread);
+                    hThread = nullptr;
+                    timed_out = true;
+                    break;
+                }
+
+                if (Method::skip_this_process)
+                {
+                    TerminateThread(hThread, 1);
+                    std::cout << "\nProcess " << idx << " skipped!\n";
+                    CloseHandle(hThread);
+                    hThread = nullptr;
+                    skipped = true;
+                    break;
+                }
+            }
+
+            if (!timed_out && !skipped)
+            {
+                std::cout << "\nProcess " << idx << " completed successfully\n";
+                if (hThread)
+                {
+                    CloseHandle(hThread);
+                }
+            }
+        }
+
+        if (status == 1) ++num_successful;
+  //      Map *building = reconstruct_single_building(roof_pset, line_segs, it, solver_name, index_string, status);
         if (building) {
             Geom::merge_into_source(result, building);
             if (update_display) {
@@ -474,10 +571,8 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
             }
             Logger::out("-") << "done. Time: " << t_single.time_string() << std::endl;
         }
-
-        if (status == 1)        ++num_successful;
-        else if (status == 0)   ++num_compromised;
-        else                    ++num_failed;
+        else if (status == 0) ++num_compromised;
+        else ++num_failed;
 
         roofs.clear();
         progress.next();
@@ -485,7 +580,7 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
 
     if (num_complex_footprint > 0)
         Logger::warn("-") << "encountered " << num_complex_footprint << " non-simple footprint "
-                          << (num_complex_footprint > 1 ? " polygons." : " polygon.") << std::endl;
+            << (num_complex_footprint > 1 ? " polygons." : " polygon.") << std::endl;
     Logger::out("-") << "reconstruction done. "
         << num_successful << " succeeded, "
         << num_compromised << " compromised, "
@@ -493,7 +588,8 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
     result->set_offset(pset->offset());
 
     // delete intermediate directory if the reconstruction was successful
-    if (num_failed == 0 && num_compromised == 0 && FileUtils::is_directory(Method::intermediate_dir)) {
+    if (num_failed == 0 && num_compromised == 0 && FileUtils::is_directory(Method::intermediate_dir))
+    {
         if (!FileUtils::delete_directory(Method::intermediate_dir))
             Logger::err("-") << "failed to delete intermediate directory: " << Method::intermediate_dir << std::endl;
     }
@@ -502,7 +598,7 @@ bool Reconstruction::reconstruct(PointSet *pset, Map *footprint, Map *result, Li
     return (num_successful + num_compromised > 0);
 }
 
-std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet *pset, Map::Facet *footprint)
+std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet* pset, Map::Facet* footprint)
 {
     std::vector<vec3> original_points = pset->points();
     std::vector<K::Point_3> result;
@@ -549,7 +645,7 @@ std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet *pse
             FT y = image_y_min + (image_width - j - 1) * image_delta_res;
             Point_3d query_p(x, y, 0);
             vec2 q_p(CGAL::to_double(x), CGAL::to_double(y));
-            if (Geom::point_is_in_polygon(plg, q_p))// ensure the pixel point is inside  the footprint
+            if (Geom::point_is_in_polygon(plg, q_p)) // ensure the pixel point is inside  the footprint
             {
                 Face_handle fh = dt.locate(query_p);
                 auto pt0 = fh->vertex(0)->point();
@@ -559,7 +655,7 @@ std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet *pse
                 K::Vector_3 dir(0, 0, 1);
                 K::Line_3 l(query_p, dir);
                 CGAL::Object lp = CGAL::intersection(pl, l);
-                if (const Point_3d *pt = CGAL::object_cast<Point_3d>(&lp))
+                if (const Point_3d* pt = CGAL::object_cast<Point_3d>(&lp))
                 {
                     auto height = pt->z();
                     image[j][k] = height;
@@ -569,9 +665,7 @@ std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet *pse
                         image_zmin = height;
                 }
             }
-
         }
-
     }
 
     double delta_z = 255. / (image_zmax - image_zmin);
@@ -584,28 +678,28 @@ std::vector<std::vector<int>> Reconstruction::compute_height_field(PointSet *pse
             if (n == -1)
             {
                 im[i][j] = -1;
-            } else
+            }
+            else
             {
                 im[i][j] = n * delta_z - delta_z * image_zmin;
             }
         }
     }
     return im;
-
 }
 
-std::vector<std::vector<int>> Reconstruction::detect_height_jump(PointSet *pset,
-                                                                 Map::Facet *footprint,
+std::vector<std::vector<int>> Reconstruction::detect_height_jump(PointSet* pset,
+                                                                 Map::Facet* footprint,
                                                                  double min_height, double max_height)
 {
     std::vector<std::vector<int>> im = compute_height_field(pset, footprint);
     auto pts = pset->points();
     FacetHalfedgeCirculator cir(footprint);
-    Map::Halfedge *h = cir->halfedge();
+    Map::Halfedge* h = cir->halfedge();
     auto ht = h->vertex()->point().z;
 
     int sp = width_;
-    std::vector<std::vector<int >> adata(im);
+    std::vector<std::vector<int>> adata(im);
     cv::Mat image3(sp, sp, CV_8UC1, cv::Scalar(0));
     for (int i = 0; i < sp; i++)
     {
@@ -617,7 +711,6 @@ std::vector<std::vector<int>> Reconstruction::detect_height_jump(PointSet *pset,
                 if (depth < 10)
                 {
                     depth = 10;
-
                 }
                 if (depth > 245)
                 {
@@ -637,8 +730,8 @@ std::vector<std::vector<int>> Reconstruction::detect_height_jump(PointSet *pset,
     int low_threshold = (2.0) * 255 / (max_height - ht);
     int high_threshold = (min_height - ht) * 255 / (max_height - ht);
     high_threshold = std::max(high_threshold, 2 * low_threshold);
-//	std::cout << "low: " << low_threshold << std::endl;
-//	std::cout << "high: " << high_threshold << std::endl;
+    //	std::cout << "low: " << low_threshold << std::endl;
+    //	std::cout << "high: " << high_threshold << std::endl;
     cv::Canny(out1, edge, low_threshold, high_threshold);
     std::vector<std::vector<int>> point(width_, std::vector<int>(width_, 0));
     for (std::size_t i = 0; i < sp; i++)
@@ -656,16 +749,16 @@ std::vector<std::vector<int>> Reconstruction::detect_height_jump(PointSet *pset,
 }
 
 
-std::vector<vec3> Reconstruction::compute_line_segment(PointSet *seg_pset,
-                                                       PointSet *roof_pset,
-                                                       Map::Facet *footprint)
+std::vector<vec3> Reconstruction::compute_line_segment(PointSet* seg_pset,
+                                                       PointSet* roof_pset,
+                                                       Map::Facet* footprint)
 {
     std::vector<std::vector<int>> edge_point;
     std::vector<vec3> line_segments;
     if (roof_pset->points().size() > 70)
     {
-        std::vector<VertexGroup::Ptr> &groups = roof_pset->groups();
-        const std::vector<vec3> &roofpoints = roof_pset->points();
+        std::vector<VertexGroup::Ptr>& groups = roof_pset->groups();
+        const std::vector<vec3>& roofpoints = roof_pset->points();
         std::vector<vec3> boundary_edge;
         double min_height = 1e10;
         double max_height = -1e10;
@@ -673,8 +766,8 @@ std::vector<vec3> Reconstruction::compute_line_segment(PointSet *seg_pset,
         std::vector<double> height_seq;
         for (std::size_t i = 0; i < groups.size(); ++i)
         {
-            VertexGroup *g = groups[i];
-            const Plane3d &plane = g->plane();
+            VertexGroup* g = groups[i];
+            const Plane3d& plane = g->plane();
             if (std::abs(plane.normal().z) < 0.3f)
                 continue;
             auto rf = g->point_set()->points();
@@ -684,13 +777,12 @@ std::vector<vec3> Reconstruction::compute_line_segment(PointSet *seg_pset,
             for (std::size_t i = 0; i < num_input; ++i)
             {
                 int idx = g->at(i);
-                const vec3 &p = rf[idx];
+                const vec3& p = rf[idx];
                 if (p.z > max_height)
                 {
                     max_height = p.z;
                 }
                 cen += p;
-
             }
             cen /= num_input;
             height_seq.push_back(cen.z);
@@ -698,7 +790,7 @@ std::vector<vec3> Reconstruction::compute_line_segment(PointSet *seg_pset,
 
         std::sort(height_seq.begin(), height_seq.end());
         FacetHalfedgeCirculator cir(footprint);
-        Map::Halfedge *h = cir->halfedge();
+        Map::Halfedge* h = cir->halfedge();
         auto foot_height = h->vertex()->point().z;
         for (int j = 0; j < height_seq.size(); ++j)
         {
@@ -726,29 +818,31 @@ std::vector<vec3> Reconstruction::compute_line_segment(PointSet *seg_pset,
 //      1: successful
 //      0: compromised (due to, e.g., too complex, detected inner wall excluded)
 //     -1: failed (due to, e.g., insufficient data and roofs not detected, solver timeout).
-Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
+Map* Reconstruction::reconstruct_single_building(PointSet* roof_pset,
                                                  const std::vector<vec3>& line_segments,
-                                                 Map::Facet *footprint,
+                                                 Map::Facet* footprint,
                                                  LinearProgramSolver::SolverName solver_name,
                                                  const std::string& index_string,
                                                  int& status)
 {
     status = -1; // default to failed
 
-    if (roof_pset->groups().empty())  {
+    if (roof_pset->groups().empty())
+    {
         Logger::warn("-") << "planar segments do not exist" << std::endl;
         return nullptr;
     }
 
-    const std::string footprint_file_name  = Method::intermediate_dir + "/" + index_string + "_Footprint.obj";
+    const std::string footprint_file_name = Method::intermediate_dir + "/" + index_string + "_Footprint.obj";
 
     // refine planes
     HypothesisGenerator hypo(roof_pset);
     hypo.refine_planes();
     // generate candidate faces
     PolyFitInfo polyfit_info;
-    Map *hypothesis = hypo.generate(&polyfit_info, footprint, line_segments);
-    if (!hypothesis) {
+    Map* hypothesis = hypo.generate(&polyfit_info, footprint, line_segments);
+    if (!hypothesis)
+    {
         if (!save_footprint(footprint, roof_pset->offset(), footprint_file_name))
             Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
         return nullptr;
@@ -756,17 +850,20 @@ Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
 
     // in case huge number of candidate faces, we may skip the reconstruction (because no solver can solve the involved
     // optimization problem within a reasonable time window).
-    if (hypothesis->size_of_facets() > Method::max_allowed_candidate_faces) {
+    if (hypothesis->size_of_facets() > Method::max_allowed_candidate_faces)
+    {
         // save footprint
         if (!save_footprint(footprint, roof_pset->offset(), footprint_file_name))
             Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
         // save detected lines
-        const std::string line_segments_file_name = Method::intermediate_dir + "/" + index_string + "_DetectedLineSegments.xyz";
+        const std::string line_segments_file_name = Method::intermediate_dir + "/" + index_string +
+            "_DetectedLineSegments.xyz";
         std::ofstream output(line_segments_file_name.c_str());
         if (output.fail())
             Logger::err("-") << "could not create file for saving: " << line_segments_file_name;
-        else {
-            for (auto p: line_segments)
+        else
+        {
+            for (auto p : line_segments)
                 output << p << std::endl;
         }
 
@@ -775,27 +872,35 @@ Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
         delete hypothesis;
         std::vector<vec3> detected_line_segments = {};
         hypothesis = hypo.generate(&polyfit_info, footprint, detected_line_segments);
-        if (hypothesis->size_of_facets() > Method::max_allowed_candidate_faces) { // still too many
-            Logger::err("-") << "too many candidate faces (" << initial_num_candidate_faces << " -> " << hypothesis->size_of_facets() << " by excluding detected lines). Reconstruction skipped, or it would take too much time" << std::endl;
+        if (hypothesis->size_of_facets() > Method::max_allowed_candidate_faces)
+        {
+            // still too many
+            Logger::err("-") << "too many candidate faces (" << initial_num_candidate_faces << " -> " << hypothesis->
+                size_of_facets() <<
+                " by excluding detected lines). Reconstruction skipped, or it would take too much time" << std::endl;
             status = -1;
             return nullptr;
         }
-        else {
-            Logger::warn("-") << "too many candidate faces (" << initial_num_candidate_faces << " -> " << hypothesis->size_of_facets() << " by excluding detected lines). Reconstruction compromised" << std::endl;
+        else
+        {
+            Logger::warn("-") << "too many candidate faces (" << initial_num_candidate_faces << " -> " << hypothesis->
+                size_of_facets() << " by excluding detected lines). Reconstruction compromised" << std::endl;
             status = 0;
         }
     }
 
-    std::vector<Plane3d *> v = hypo.get_vertical_planes();
+    std::vector<Plane3d*> v = hypo.get_vertical_planes();
     // generate quality measures
     polyfit_info.generate(roof_pset, hypothesis, v, false);
 
     FaceSelection selector(roof_pset, hypothesis);
     bool success = selector.optimize(&polyfit_info, footprint, v, solver_name);
-    if (success) {
+    if (success)
+    {
         extrude_boundary_to_ground(hypothesis, Geom::facet_plane(footprint), &polyfit_info);
         Geom::merge_into_source(hypothesis, footprint);
-        if (hypothesis->size_of_facets() == 0) {
+        if (hypothesis->size_of_facets() == 0)
+        {
             delete hypothesis;
             status = -1;
             if (!save_footprint(footprint, roof_pset->offset(), footprint_file_name))
@@ -803,8 +908,11 @@ Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
             return nullptr;
         }
 
-        if (status == 0) { // if known to be compromised
-            const std::string reconstruction_file_name = Method::intermediate_dir + "/" + index_string + "_Compromised_Result.obj";
+        if (status == 0)
+        {
+            // if known to be compromised
+            const std::string reconstruction_file_name = Method::intermediate_dir + "/" + index_string +
+                "_Compromised_Result.obj";
             hypothesis->set_offset(roof_pset->offset());
             MapIO::save(reconstruction_file_name, hypothesis);
         }
@@ -812,11 +920,13 @@ Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
             status = 1; // if reached here, then successful
         return hypothesis;
     }
-    else {
+    else
+    {
         if (!save_footprint(footprint, roof_pset->offset(), footprint_file_name))
             Logger::err("-") << "failed to save footprint as mesh into file: " << footprint_file_name << std::endl;
 
-        const std::string candidate_faces_file_name = Method::intermediate_dir + "/" + index_string + "_Failed_JustCandidateFaces.obj";
+        const std::string candidate_faces_file_name = Method::intermediate_dir + "/" + index_string +
+            "_Failed_JustCandidateFaces.obj";
         hypothesis->set_offset(roof_pset->offset());
         MapIO::save(candidate_faces_file_name, hypothesis);
         Logger::err("-") << "reconstruction failed (in face selection)" << std::endl;
@@ -828,7 +938,7 @@ Map *Reconstruction::reconstruct_single_building(PointSet *roof_pset,
 
 #define SIMPLE_EXTRUSION
 
-void Reconstruction::extrude_boundary_to_ground(Map *model, const Plane3d &ground, PolyFitInfo *polyfit_info)
+void Reconstruction::extrude_boundary_to_ground(Map* model, const Plane3d& ground, PolyFitInfo* polyfit_info)
 {
 #ifdef SIMPLE_EXTRUSION // a planar wall might contain multiple pieces
 
@@ -846,13 +956,13 @@ void Reconstruction::extrude_boundary_to_ground(Map *model, const Plane3d &groun
             c       d
             */
             Polygon3d plg;
-            const vec3 &a = it->vertex()->point();
+            const vec3& a = it->vertex()->point();
             plg.push_back(a);
-            const vec3 &b = it->opposite()->vertex()->point();
+            const vec3& b = it->opposite()->vertex()->point();
             plg.push_back(b);
-            const vec3 &c = ground.projection(b);
+            const vec3& c = ground.projection(b);
             plg.push_back(c);
-            const vec3 &d = ground.projection(a);
+            const vec3& d = ground.projection(a);
             plg.push_back(d);
             auto dis = length(c - d);
             if (dis > 1e-4)
@@ -871,7 +981,7 @@ void Reconstruction::extrude_boundary_to_ground(Map *model, const Plane3d &groun
     for (std::size_t i = 0; i < polygons.size(); ++i)
     {
         builder.begin_facet();
-        const Polygon3d &plg = polygons[i];
+        const Polygon3d& plg = polygons[i];
         for (std::size_t j = 0; j < plg.size(); ++j)
         {
             builder.add_vertex(plg[j]);
@@ -886,7 +996,7 @@ void Reconstruction::extrude_boundary_to_ground(Map *model, const Plane3d &groun
 #endif
 }
 
-Map *Reconstruction::generate_footprint(PointSet *pset)
+Map* Reconstruction::generate_footprint(PointSet* pset)
 {
     //get the alpha shape of the point set
     auto alpha_boundary = AlphaShapeBoundary::apply(pset, 1.5);
@@ -896,10 +1006,10 @@ Map *Reconstruction::generate_footprint(PointSet *pset)
     MapBuilder builder(footprint);
     builder.begin_surface();
     builder.begin_facet();
-    int ind=0;
+    int ind = 0;
     for (int i = 0; i < alpha_boundary.size(); ++i)
     {
-        auto p=alpha_boundary[i];
+        auto p = alpha_boundary[i];
         builder.add_vertex(vec3(p.x, p.y, footprint_height));
         builder.add_vertex_to_facet(ind);
         ++ind;
@@ -913,28 +1023,30 @@ Map *Reconstruction::generate_footprint(PointSet *pset)
 }
 
 
-
 #include <CGAL/Polyline_simplification_2/simplify.h>
 namespace PS = CGAL::Polyline_simplification_2;
 
-typedef CGAL::Polygon_2<Kernel>              Polygon_2;
-typedef PS::Stop_above_cost_threshold        Stop;
-typedef PS::Squared_distance_cost            Cost;
+typedef CGAL::Polygon_2<Kernel> Polygon_2;
+typedef PS::Stop_above_cost_threshold Stop;
+typedef PS::Squared_distance_cost Cost;
 
-void Reconstruction::footprint_simplification(Map* footprint) const{
+void Reconstruction::footprint_simplification(Map* footprint) const
+{
     Map tmp_footprint;
 
     MapBuilder builder(&tmp_footprint);
     builder.begin_surface();
 
-    int ind=0;
-    FOR_EACH_FACET_CONST(Map, footprint, it) {
-        const Polygon3d &plg = it->to_polygon();
+    int ind = 0;
+    FOR_EACH_FACET_CONST(Map, footprint, it)
+    {
+        const Polygon3d& plg = it->to_polygon();
         double z = plg[0].z;
 
         Polygon_2 plg2d;
-        for (std::size_t i = 0; i < plg.size(); ++i) {
-            const vec3 &p = plg[i];
+        for (std::size_t i = 0; i < plg.size(); ++i)
+        {
+            const vec3& p = plg[i];
             plg2d.push_back(Point_2(p.x, p.y));
         }
         const auto& bbox = plg2d.bbox();
@@ -950,7 +1062,8 @@ void Reconstruction::footprint_simplification(Map* footprint) const{
             plg2d.reverse_orientation();
 
         builder.begin_facet();
-        for (std::size_t i = 0; i < plg2d.size(); ++i) {
+        for (std::size_t i = 0; i < plg2d.size(); ++i)
+        {
             const auto& p = plg2d[i];
             builder.add_vertex(vec3(p.x(), p.y(), z));
             builder.add_vertex_to_facet(ind);
@@ -964,7 +1077,8 @@ void Reconstruction::footprint_simplification(Map* footprint) const{
     footprint->clear();
     Geom::merge_into_source(footprint, &tmp_footprint);
 
-    const std::string file_name = Method::intermediate_dir + "/" + FileUtils::base_name(footprint->name()) + "_SimplifiedFootPrint.obj";
+    const std::string file_name = Method::intermediate_dir + "/" + FileUtils::base_name(footprint->name()) +
+        "_SimplifiedFootPrint.obj";
     MapIO::save(file_name, footprint);
     Logger::out("-") << "simplified footprint data saved to '" << file_name << "'" << std::endl;
 }
