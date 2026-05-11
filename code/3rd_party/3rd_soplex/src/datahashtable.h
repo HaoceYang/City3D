@@ -341,7 +341,8 @@ public:
       m_memfactor = base.m_memfactor;
       m_used = base.m_used;
       m_hashsize = base.m_hashsize;
-      primes = base.primes;
+      for(int i = 0; i < 50; ++i)
+         primes[i] = base.primes[i];
       nprimes = base.nprimes;
 
       assert(m_memfactor > 1.0);
@@ -356,9 +357,11 @@ public:
       , m_memfactor(base.m_memfactor)
       , m_used(base.m_used)
       , m_hashsize(base.m_hashsize)
-      , primes(base.primes)
       , nprimes(base.nprimes)
    {
+      for(int i = 0; i < 50; ++i)
+         primes[i] = base.primes[i];
+
       assert(m_memfactor > 1.0);
       assert(isConsistent());
    }
